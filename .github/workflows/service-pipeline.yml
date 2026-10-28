@@ -12,7 +12,7 @@ on:
         type: string
       node-version:
         type: string
-        default: '20'
+        default: '24'
       deploy:
         description: Desplegar en Railway tras publicar la imagen
         type: boolean
