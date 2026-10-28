@@ -1,0 +1,81 @@
+# Workflow reutilizable (repo "pipelines"): test -> docker -> deploy de UN microservicio.
+# Cada repo de microservicio lo invoca con:
+#   uses: CRIS7IANIC0/pipelines/.github/workflows/service-pipeline.yml@main
+name: Service pipeline
+
+on:
+  workflow_call:
+    inputs:
+      service:
+        description: Nombre del servicio (igual que el servicio en Railway)
+        required: true
+        type: string
+      node-version:
+        type: string
+        default: '20'
+      deploy:
+        description: Desplegar en Railway tras publicar la imagen
+        type: boolean
+        default: true
+    secrets:
+      RAILWAY_TOKEN:
+        required: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+      - run: npm ci
+      - run: npx prisma generate
+        if: ${{ hashFiles('prisma/schema.prisma') != '' }}
+      - run: npm run build
+      - run: npm test
+
+  docker:
+    name: Docker
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: meta
+        name: Nombre de imagen en minúsculas
+        run: echo "image=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: ${{ github.ref == 'refs/heads/main' }}
+          tags: |
+            ${{ steps.meta.outputs.image }}:${{ github.sha }}
+            ${{ steps.meta.outputs.image }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    name: Deploy (Railway)
+    needs: docker
+    if: ${{ inputs.deploy && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    environment: production # aprobación manual: Settings > Environments
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm install -g @railway/cli
+      - name: Desplegar en Railway
+        run: railway up --service "${{ inputs.service }}" --ci
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
